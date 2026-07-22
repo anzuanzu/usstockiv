@@ -5,6 +5,7 @@ const MAX_PAGES = 16;
 
 const els = {
   form: document.querySelector("#queryForm"),
+  credentialsForm: document.querySelector("#credentialsForm"),
   symbol: document.querySelector("#symbol"),
   strikePercent: document.querySelector("#strikePercent"),
   riskFreeRate: document.querySelector("#riskFreeRate"),
@@ -333,6 +334,10 @@ async function loadTermStructure(event) {
 }
 
 els.form.addEventListener("submit", loadTermStructure);
+els.credentialsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveCredentials();
+});
 els.saveCredentials.addEventListener("click", saveCredentials);
 els.clearCredentials.addEventListener("click", clearCredentials);
 loadCredentials();

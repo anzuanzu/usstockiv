@@ -8,6 +8,7 @@
       content="以 Alpaca Indicative 選擇權資料查詢美股 2 至 6 個月 IV，供 FCN 研究使用。"
     />
     <title>US Stock IV | FCN 期限波動率</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -91,7 +92,7 @@
               <span>Alpaca 免費 API 設定</span>
               <span aria-hidden="true">＋</span>
             </summary>
-            <div class="api-settings-body">
+            <form class="api-settings-body" id="credentialsForm">
               <p>API Key 只會存於此瀏覽器的暫存區，關閉分頁即清除；不會寫入 GitHub 或傳回本站。</p>
               <label class="field" for="apiKey">
                 <span>API Key ID</span>
@@ -106,7 +107,7 @@
                 <button class="text-button" id="clearCredentials" type="button">清除</button>
               </div>
               <a href="https://alpaca.markets/" target="_blank" rel="noreferrer">申請免費 Alpaca 帳號與 API Key ↗</a>
-            </div>
+            </form>
           </details>
 
           <div class="method-note">
