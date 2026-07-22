@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="以 Alpaca Indicative 選擇權資料查詢美股 2 至 6 個月 IV，供 FCN 研究使用。"
+      content="以美股日線資料計算 2 至 6 個月歷史波動率，供 FCN 研究使用。"
     />
     <title>US Stock IV | FCN 期限波動率</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
@@ -26,21 +26,21 @@
         </a>
         <div class="hero-copy">
           <p class="eyebrow">FCN RESEARCH DESK</p>
-          <h1>找到對應期限的<br /><em>下檔 Put&nbsp;IV</em></h1>
+          <h1>以歷史波動<br /><em>建立 FCN 風險代理值</em></h1>
           <p>
-            針對 2 至 6 個月 FCN，挑選最接近目標到期日與轉換價的美股 Put，快速比較期限波動率。
+            沒有選擇權 IV 時，依 2 至 6 個月期限計算 EWMA 年化波動、下跌波動與保守風險代理值。
           </p>
         </div>
         <div class="data-badge" role="note">
           <span class="pulse"></span>
-          <span>FREE INDICATIVE DATA</span>
+          <span>FREE EOD DATA</span>
         </div>
       </header>
 
       <section class="notice" aria-label="資料使用說明">
         <strong>研究用途提醒</strong>
         <span>
-          免費 Indicative feed 的報價會延遲且可能經調整；結果不可作為 FCN 最終報價或投資建議。正式條件請以發行券商報價為準。
+          資料為免費美股日線歷史價格；本工具產生的是波動率代理值，並非選擇權 IV 或 FCN 最終報價。正式條件請以發行券商報價為準。
         </span>
       </section>
 
@@ -57,62 +57,29 @@
               <input id="symbol" name="symbol" type="text" value="AAPL" autocomplete="off" spellcheck="false" maxlength="12" />
             </label>
 
-            <div class="field-grid">
-              <label class="field" for="strikePercent">
-                <span>FCN 轉換價</span>
+            <label class="field" for="conservativeBuffer">
+                <span>FCN 保守加成</span>
                 <div class="input-suffix">
-                  <input id="strikePercent" name="strikePercent" type="number" value="80" min="30" max="110" step="1" />
+                  <input id="conservativeBuffer" name="conservativeBuffer" type="number" value="15" min="0" max="100" step="1" />
                   <b>%</b>
                 </div>
-              </label>
-              <label class="field" for="riskFreeRate">
-                <span>無風險利率</span>
-                <div class="input-suffix">
-                  <input id="riskFreeRate" name="riskFreeRate" type="number" value="4.25" min="0" max="20" step="0.01" />
-                  <b>%</b>
-                </div>
-              </label>
-              <label class="field" for="dividendYield">
-                <span>股利殖利率</span>
-                <div class="input-suffix">
-                  <input id="dividendYield" name="dividendYield" type="number" value="0" min="0" max="30" step="0.01" />
-                  <b>%</b>
-                </div>
-              </label>
-            </div>
+            </label>
+
+            <label class="field" for="apiKey">
+              <span>Twelve Data 免費 API Key</span>
+              <input id="apiKey" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="貼上免費個人 API Key" />
+            </label>
+            <p class="api-help">僅暫存於這個瀏覽器分頁，不會寫入 GitHub。<a href="https://twelvedata.com/pricing" target="_blank" rel="noreferrer">免費申請 Key ↗</a></p>
 
             <button class="primary-button" id="loadButton" type="submit">
-              <span>載入期限 IV</span>
+              <span>載入波動率</span>
               <span aria-hidden="true">→</span>
             </button>
           </form>
 
-          <details class="api-settings" id="apiSettings">
-            <summary>
-              <span>Alpaca 免費 API 設定</span>
-              <span aria-hidden="true">＋</span>
-            </summary>
-            <form class="api-settings-body" id="credentialsForm">
-              <p>API Key 只會存於此瀏覽器的暫存區，關閉分頁即清除；不會寫入 GitHub 或傳回本站。</p>
-              <label class="field" for="apiKey">
-                <span>API Key ID</span>
-                <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="PK…" />
-              </label>
-              <label class="field" for="apiSecret">
-                <span>Secret Key</span>
-                <input id="apiSecret" type="password" autocomplete="off" spellcheck="false" placeholder="輸入 Alpaca Secret Key" />
-              </label>
-              <div class="settings-actions">
-                <button class="secondary-button" id="saveCredentials" type="button">暫存 API Key</button>
-                <button class="text-button" id="clearCredentials" type="button">清除</button>
-              </div>
-              <a href="https://alpaca.markets/" target="_blank" rel="noreferrer">申請免費 Alpaca 帳號與 API Key ↗</a>
-            </form>
-          </details>
-
           <div class="method-note">
             <span>方法</span>
-            <p>優先讀取 API IV；若未提供，則以 Put 中間價套用 Black–Scholes 模型估算。</p>
+            <p>使用 Twelve Data 免費日線。EWMA 加權近期日報酬；FCN 代理值取 EWMA 與下跌波動較高者，再加上保守係數。</p>
           </div>
         </aside>
 
@@ -122,13 +89,13 @@
               <p class="eyebrow">TERM STRUCTURE</p>
               <h2 id="resultTitle">尚未載入資料</h2>
             </div>
-            <p class="status" id="statusText">請輸入 Alpaca API Key 後開始查詢。</p>
+            <p class="status" id="statusText">輸入美股代碼後即可開始查詢。</p>
           </div>
 
           <div class="empty-state" id="emptyState">
             <div class="empty-symbol">σ</div>
-            <h3>準備比較 FCN 的下檔波動率</h3>
-            <p>設定代碼與轉換價，系統會選出最接近 2～6 個月目標到期日的 Put。</p>
+            <h3>準備建立 FCN 波動率代理值</h3>
+            <p>系統會用近期日線，分別計算對應 2～6 個月期限的 EWMA 與下跌波動。</p>
           </div>
 
           <div class="results hidden" id="results">
@@ -138,12 +105,12 @@
                 <thead>
                   <tr>
                     <th>FCN 期限</th>
-                    <th>選擇權到期日</th>
-                    <th>Put 履約價</th>
-                    <th>Put IV</th>
-                    <th>來源</th>
-                    <th>Bid / Ask</th>
-                    <th>Delta</th>
+                    <th>回看交易日</th>
+                    <th>EWMA 年化波動</th>
+                    <th>下跌年化波動</th>
+                    <th>最大單日跌幅</th>
+                    <th>FCN 保守代理值</th>
+                    <th>期限 1σ 預期波動</th>
                   </tr>
                 </thead>
                 <tbody id="resultBody"></tbody>
@@ -157,18 +124,18 @@
       <section class="guide-grid">
         <article>
           <p class="guide-number">01</p>
-          <h3>為何看下檔 Put？</h3>
-          <p>FCN 的轉換風險集中於履約價下方；選取接近轉換價的 Put IV，通常比平值 IV 更有參考價值。</p>
+          <h3>為何看下跌波動？</h3>
+          <p>FCN 的轉換風險集中於下跌；只計入負報酬日的下跌波動，比整體波動更接近下檔壓力。</p>
         </article>
         <article>
           <p class="guide-number">02</p>
           <h3>每個期限獨立看</h3>
-          <p>2、3、4、5、6 個月各自有不同的期限結構與事件風險，不能用單一 IV 直接套用。</p>
+          <p>2、3、4、5、6 個月各自使用不同的日線視窗，不能用單一週波動率直接套用。</p>
         </article>
         <article>
           <p class="guide-number">03</p>
           <h3>正式報價仍以券商為準</h3>
-          <p>票息還受股利、利率、發行人信用利差、避險成本與條款影響，IV 僅是研究輸入之一。</p>
+          <p>票息還受股利、利率、發行人信用利差、避險成本與條款影響；本頁僅提供風險代理值。</p>
         </article>
       </section>
     </main>

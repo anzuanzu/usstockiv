@@ -1,20 +1,19 @@
-const DATA_API = "https://data.alpaca.markets";
-const CREDENTIALS_KEY = "us-stock-iv:alpaca-credentials";
-const TARGET_MONTHS = [2, 3, 4, 5, 6];
-const MAX_PAGES = 16;
+const TWELVE_DATA_API = "https://api.twelvedata.com/time_series";
+const API_KEY_CACHE = "us-stock-iv:twelve-data-key";
+const TERM_WINDOWS = [
+  { months: 2, sessions: 42 },
+  { months: 3, sessions: 63 },
+  { months: 4, sessions: 84 },
+  { months: 5, sessions: 105 },
+  { months: 6, sessions: 126 },
+];
+const EWMA_LAMBDA = 0.94;
 
 const els = {
   form: document.querySelector("#queryForm"),
-  credentialsForm: document.querySelector("#credentialsForm"),
   symbol: document.querySelector("#symbol"),
-  strikePercent: document.querySelector("#strikePercent"),
-  riskFreeRate: document.querySelector("#riskFreeRate"),
-  dividendYield: document.querySelector("#dividendYield"),
+  conservativeBuffer: document.querySelector("#conservativeBuffer"),
   apiKey: document.querySelector("#apiKey"),
-  apiSecret: document.querySelector("#apiSecret"),
-  saveCredentials: document.querySelector("#saveCredentials"),
-  clearCredentials: document.querySelector("#clearCredentials"),
-  apiSettings: document.querySelector("#apiSettings"),
   loadButton: document.querySelector("#loadButton"),
   statusText: document.querySelector("#statusText"),
   resultTitle: document.querySelector("#resultTitle"),
@@ -25,44 +24,6 @@ const els = {
   tableFootnote: document.querySelector("#tableFootnote"),
 };
 
-function loadCredentials() {
-  try {
-    const value = JSON.parse(sessionStorage.getItem(CREDENTIALS_KEY) || "null");
-    if (value?.key && value?.secret) {
-      els.apiKey.value = value.key;
-      els.apiSecret.value = value.secret;
-      return value;
-    }
-  } catch {
-    sessionStorage.removeItem(CREDENTIALS_KEY);
-  }
-  return null;
-}
-
-function credentialsFromForm() {
-  const key = els.apiKey.value.trim();
-  const secret = els.apiSecret.value.trim();
-  return key && secret ? { key, secret } : null;
-}
-
-function saveCredentials() {
-  const credentials = credentialsFromForm();
-  if (!credentials) {
-    setStatus("請完整輸入 API Key ID 與 Secret Key。", true);
-    els.apiSettings.open = true;
-    return;
-  }
-  sessionStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
-  setStatus("API Key 已暫存於此瀏覽器分頁。", false);
-}
-
-function clearCredentials() {
-  sessionStorage.removeItem(CREDENTIALS_KEY);
-  els.apiKey.value = "";
-  els.apiSecret.value = "";
-  setStatus("API Key 已從此瀏覽器分頁清除。", false);
-}
-
 function setStatus(message, isError = false) {
   els.statusText.textContent = message;
   els.statusText.classList.toggle("error", isError);
@@ -70,274 +31,158 @@ function setStatus(message, isError = false) {
 
 function formatMoney(value) {
   if (!Number.isFinite(value)) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function formatPercent(value) {
   return Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "—";
 }
 
-function formatNumber(value, digits = 2) {
-  return Number.isFinite(value) ? Number(value).toFixed(digits) : "—";
+function formatDate(value) {
+  return new Intl.DateTimeFormat("zh-TW", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "UTC",
+  }).format(value);
 }
 
-function dateIso(date) {
-  return date.toISOString().slice(0, 10);
-}
+async function fetchDailyPrices(symbol, apiKey) {
+  const url = new URL(TWELVE_DATA_API);
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("interval", "1day");
+  url.searchParams.set("outputsize", "500");
+  url.searchParams.set("apikey", apiKey);
 
-function addMonths(date, months) {
-  const copy = new Date(date);
-  const day = copy.getDate();
-  copy.setDate(1);
-  copy.setMonth(copy.getMonth() + months);
-  copy.setDate(Math.min(day, new Date(copy.getFullYear(), copy.getMonth() + 1, 0).getDate()));
-  return copy;
-}
-
-function parseOccSymbol(symbol) {
-  const match = String(symbol).match(/^(.+?)(\d{6})([CP])(\d{8})$/);
-  if (!match) return null;
-  const [, root, datePart, type, strikePart] = match;
-  const year = 2000 + Number(datePart.slice(0, 2));
-  const month = Number(datePart.slice(2, 4));
-  const day = Number(datePart.slice(4, 6));
-  const expiry = new Date(Date.UTC(year, month - 1, day));
-  if (Number.isNaN(expiry.getTime())) return null;
-  return { root, type: type === "P" ? "put" : "call", expiry, strike: Number(strikePart) / 1000 };
-}
-
-function getSnapshotEntries(payload) {
-  const snapshots = payload?.snapshots || payload?.option_snapshots || payload || {};
-  return Object.entries(snapshots).map(([symbol, snapshot]) => ({ symbol, snapshot }));
-}
-
-function midpoint(quote) {
-  const bid = Number(quote?.bp ?? quote?.bid_price ?? quote?.bidPrice);
-  const ask = Number(quote?.ap ?? quote?.ask_price ?? quote?.askPrice);
-  if (bid > 0 && ask > 0 && ask >= bid) return (bid + ask) / 2;
-  return Number(quote?.ap ?? quote?.ask_price ?? quote?.askPrice ?? quote?.bp ?? quote?.bid_price ?? quote?.bidPrice) || null;
-}
-
-function directIv(snapshot) {
-  const values = [
-    snapshot?.implied_volatility,
-    snapshot?.impliedVolatility,
-    snapshot?.iv,
-    snapshot?.greeks?.implied_volatility,
-    snapshot?.greeks?.impliedVolatility,
-  ];
-  const value = values.find((item) => Number.isFinite(Number(item)) && Number(item) > 0);
-  if (value == null) return null;
-  const number = Number(value);
-  return number > 3 ? number / 100 : number;
-}
-
-function normalCdf(x) {
-  const sign = x < 0 ? -1 : 1;
-  const z = Math.abs(x) / Math.sqrt(2);
-  const t = 1 / (1 + 0.3275911 * z);
-  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) * Math.exp(-z * z);
-  return 0.5 * (1 + sign * erf);
-}
-
-function blackScholesPut({ spot, strike, years, rate, dividend, volatility }) {
-  if (!(spot > 0 && strike > 0 && years > 0 && volatility > 0)) return null;
-  const sigmaRootT = volatility * Math.sqrt(years);
-  const d1 = (Math.log(spot / strike) + (rate - dividend + (volatility * volatility) / 2) * years) / sigmaRootT;
-  const d2 = d1 - sigmaRootT;
-  return strike * Math.exp(-rate * years) * normalCdf(-d2) - spot * Math.exp(-dividend * years) * normalCdf(-d1);
-}
-
-function solveImpliedVolatility({ optionPrice, spot, strike, years, rate, dividend }) {
-  if (!(optionPrice > 0 && spot > 0 && strike > 0 && years > 0)) return null;
-  const lowerBound = Math.max(0, strike * Math.exp(-rate * years) - spot * Math.exp(-dividend * years));
-  if (optionPrice < lowerBound - 0.02 || optionPrice > strike) return null;
-  let low = 0.0001;
-  let high = 5;
-  for (let iteration = 0; iteration < 80; iteration += 1) {
-    const mid = (low + high) / 2;
-    const modelPrice = blackScholesPut({ spot, strike, years, rate, dividend, volatility: mid });
-    if (modelPrice == null) return null;
-    if (Math.abs(modelPrice - optionPrice) < 0.0001) return mid;
-    if (modelPrice > optionPrice) high = mid;
-    else low = mid;
+  let response;
+  try {
+    response = await fetch(url, { cache: "no-store" });
+  } catch {
+    throw new Error("Twelve Data 日線來源暫時無法連線，請稍後再試。");
   }
-  return (low + high) / 2;
-}
-
-async function apiFetch(path, credentials, query = {}) {
-  const url = new URL(`${DATA_API}${path}`);
-  Object.entries(query).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
-  });
-  const response = await fetch(url, {
-    headers: {
-      "APCA-API-KEY-ID": credentials.key,
-      "APCA-API-SECRET-KEY": credentials.secret,
-    },
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body?.message || `Alpaca 回傳 ${response.status}`);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.status === "error" || payload?.code) {
+    throw new Error(payload?.message || `Twelve Data 回傳 ${response.status}。`);
   }
-  return response.json();
+  if (!Array.isArray(payload?.values)) {
+    throw new Error("找不到此美股代碼的可用日線資料。");
+  }
+  return payload.values.map((row) => ({
+    date: new Date(`${row.datetime}T00:00:00Z`),
+    close: Number(row.close),
+  })).filter((row) => Number.isFinite(row.close) && row.close > 0).reverse();
 }
 
-async function fetchUnderlyingPrice(symbol, credentials) {
-  const payload = await apiFetch(`/v2/stocks/${encodeURIComponent(symbol)}/snapshot`, credentials, { feed: "iex" });
-  const quote = payload?.latestQuote || payload?.latest_quote;
-  const trade = payload?.latestTrade || payload?.latest_trade;
-  return midpoint(quote) || Number(trade?.p ?? trade?.price) || Number(payload?.dailyBar?.c ?? payload?.daily_bar?.close) || null;
-}
-
-async function fetchPutChain(symbol, credentials, startDate, endDate) {
-  const entries = [];
-  let pageToken = null;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const payload = await apiFetch(`/v1beta1/options/snapshots/${encodeURIComponent(symbol)}`, credentials, {
-      feed: "indicative",
-      type: "put",
-      expiration_date_gte: dateIso(startDate),
-      expiration_date_lte: dateIso(endDate),
-      limit: 1000,
-      page_token: pageToken,
+function toLogReturns(prices) {
+  const values = [];
+  for (let index = 1; index < prices.length; index += 1) {
+    const current = prices[index];
+    const previous = prices[index - 1];
+    values.push({
+      date: current.date,
+      value: Math.log(current.close / previous.close),
     });
-    entries.push(...getSnapshotEntries(payload));
-    pageToken = payload?.next_page_token || payload?.nextPageToken || null;
-    if (!pageToken) return entries;
   }
-  throw new Error("選擇權鏈過大，已停止於 16 頁；請改用流動性較高的轉換價範圍或稍後再試。");
+  return values.filter((row) => Number.isFinite(row.value));
 }
 
-function normaliseOptions(entries, spot, rate, dividend) {
-  const now = new Date();
-  return entries.map(({ symbol, snapshot }) => {
-    const contract = parseOccSymbol(symbol);
-    if (!contract || contract.type !== "put") return null;
-    const quote = snapshot?.latestQuote || snapshot?.latest_quote || snapshot?.quote || {};
-    const bid = Number(quote?.bp ?? quote?.bid_price ?? quote?.bidPrice) || null;
-    const ask = Number(quote?.ap ?? quote?.ask_price ?? quote?.askPrice) || null;
-    const mid = midpoint(quote);
-    const years = Math.max((contract.expiry.getTime() - now.getTime()) / (365.25 * 24 * 60 * 60 * 1000), 0);
-    const apiIv = directIv(snapshot);
-    const computedIv = apiIv ? null : solveImpliedVolatility({ optionPrice: mid, spot, strike: contract.strike, years, rate, dividend });
-    const delta = Number(snapshot?.greeks?.delta ?? snapshot?.delta);
-    return {
-      ...contract,
-      symbol,
-      bid,
-      ask,
-      mid,
-      iv: apiIv || computedIv,
-      ivSource: apiIv ? "API IV" : computedIv ? "模型估算" : "無法計算",
-      delta: Number.isFinite(delta) ? delta : null,
-      distance: Math.abs(contract.strike - spot),
-    };
-  }).filter((option) => option && Number.isFinite(option.iv));
-}
-
-function chooseContracts(options, targetStrike) {
-  const expiryGroups = new Map();
-  options.forEach((option) => {
-    const key = dateIso(option.expiry);
-    if (!expiryGroups.has(key)) expiryGroups.set(key, []);
-    expiryGroups.get(key).push(option);
+function ewmaAnnualisedVolatility(returns) {
+  let weightedSquares = 0;
+  let totalWeight = 0;
+  returns.forEach((entry, index) => {
+    const age = returns.length - index - 1;
+    const weight = EWMA_LAMBDA ** age;
+    weightedSquares += weight * entry.value * entry.value;
+    totalWeight += weight;
   });
-  const grouped = [...expiryGroups.entries()].map(([expiry, contracts]) => ({ expiry: new Date(`${expiry}T00:00:00Z`), contracts }));
-  const today = new Date();
-  return TARGET_MONTHS.map((months) => {
-    const targetDate = addMonths(today, months);
-    const group = grouped.reduce((best, candidate) => {
-      if (!best) return candidate;
-      return Math.abs(candidate.expiry - targetDate) < Math.abs(best.expiry - targetDate) ? candidate : best;
-    }, null);
-    if (!group) return { months, targetDate, option: null };
-    const option = group.contracts.reduce((best, candidate) => {
-      if (!best) return candidate;
-      return Math.abs(candidate.strike - targetStrike) < Math.abs(best.strike - targetStrike) ? candidate : best;
-    }, null);
-    return { months, targetDate, option };
-  });
+  return Math.sqrt(weightedSquares / totalWeight) * Math.sqrt(252);
 }
 
-function renderResults({ symbol, spot, targetStrike, rows, rate, dividend, optionCount }) {
-  els.resultTitle.textContent = `${symbol} · 2–6 個月 Put IV`;
+function downsideAnnualisedVolatility(returns) {
+  const downsideVariance = returns.reduce((sum, entry) => sum + Math.min(entry.value, 0) ** 2, 0) / returns.length;
+  return Math.sqrt(downsideVariance) * Math.sqrt(252);
+}
+
+function calculateMetrics(returns, buffer) {
+  const ewma = ewmaAnnualisedVolatility(returns);
+  const downside = downsideAnnualisedVolatility(returns);
+  const maxDailyDrop = Math.expm1(Math.min(...returns.map((entry) => entry.value)));
+  const conservative = Math.max(ewma, downside) * (1 + buffer);
+  return { ewma, downside, maxDailyDrop, conservative };
+}
+
+function renderResults({ symbol, prices, rows, buffer }) {
+  const latest = prices.at(-1);
+  els.resultTitle.textContent = `${symbol} · FCN 波動率代理值`;
   els.quoteSummary.innerHTML = [
-    ["標的 Indicative 價格", formatMoney(spot)],
-    ["FCN 目標轉換價", formatMoney(targetStrike)],
-    ["無風險／股利率", `${(rate * 100).toFixed(2)}% / ${(dividend * 100).toFixed(2)}%`],
-    ["可計算 Put 合約", `${optionCount.toLocaleString()} 份`],
+    ["最近收盤價", formatMoney(latest.close)],
+    ["資料日期", formatDate(latest.date)],
+    ["日線樣本", `${prices.length.toLocaleString()} 日`],
+    ["保守加成", `${(buffer * 100).toFixed(0)}%`],
   ].map(([label, value]) => `<div class="quote-chip"><span>${label}</span><strong>${value}</strong></div>`).join("");
 
-  els.resultBody.innerHTML = rows.map(({ months, option }) => {
-    if (!option) {
-      return `<tr><td>${months} 個月</td><td colspan="6">此目標期間沒有可用的 Indicative Put IV。</td></tr>`;
-    }
-    const expiryText = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "UTC" }).format(option.expiry);
+  els.resultBody.innerHTML = rows.map(({ months, sessions, metrics }) => {
+    const expectedMove = metrics.conservative * Math.sqrt(sessions / 252);
     return `<tr>
       <td>${months} 個月</td>
-      <td>${expiryText}</td>
-      <td>${formatMoney(option.strike)}</td>
-      <td class="iv-value">${formatPercent(option.iv)}</td>
-      <td><span class="data-tag ${option.ivSource === "API IV" ? "api" : ""}">${option.ivSource}</span></td>
-      <td>${formatMoney(option.bid)} / ${formatMoney(option.ask)}</td>
-      <td>${formatNumber(option.delta, 3)}</td>
+      <td>${sessions} 日</td>
+      <td>${formatPercent(metrics.ewma)}</td>
+      <td>${formatPercent(metrics.downside)}</td>
+      <td>${formatPercent(metrics.maxDailyDrop)}</td>
+      <td class="iv-value">${formatPercent(metrics.conservative)}</td>
+      <td>${formatPercent(expectedMove)}</td>
     </tr>`;
   }).join("");
-  els.tableFootnote.textContent = "資料來源：Alpaca Indicative option feed。模型估算 IV 採用 Put 中間價與 Black–Scholes，未納入離散股利、提前履約與發行人避險成本。";
+  els.tableFootnote.textContent = `FCN 保守代理值 = max(EWMA 年化波動、下跌年化波動) × (1 + ${(buffer * 100).toFixed(0)}%)。期限 1σ 預期波動以代理值 × √(交易日 ÷ 252) 計算；它不是選擇權 IV，也不是票息估算。`;
   els.emptyState.classList.add("hidden");
   els.results.classList.remove("hidden");
 }
 
-async function loadTermStructure(event) {
+async function loadVolatility(event) {
   event.preventDefault();
-  const credentials = credentialsFromForm() || loadCredentials();
-  if (!credentials) {
-    els.apiSettings.open = true;
-    setStatus("請先輸入並暫存 Alpaca API Key。", true);
+  const symbol = els.symbol.value.trim().toUpperCase().replace(/[^A-Z.\-]/g, "");
+  const buffer = Number(els.conservativeBuffer.value) / 100;
+  const apiKey = els.apiKey.value.trim();
+  if (!symbol || !(buffer >= 0)) {
+    setStatus("請確認美股代碼與保守加成設定。", true);
     return;
   }
-  sessionStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
-  const symbol = els.symbol.value.trim().toUpperCase().replace(/[^A-Z.\-]/g, "");
-  const strikePercent = Number(els.strikePercent.value);
-  const rate = Number(els.riskFreeRate.value) / 100;
-  const dividend = Number(els.dividendYield.value) / 100;
-  if (!symbol || !(strikePercent > 0) || !(rate >= 0) || !(dividend >= 0)) {
-    setStatus("請確認代碼、轉換價、利率與股利率設定。", true);
+  if (!apiKey) {
+    setStatus("請先貼上 Twelve Data 的免費 API Key。", true);
+    els.apiKey.focus();
     return;
   }
 
+  sessionStorage.setItem(API_KEY_CACHE, apiKey);
   els.loadButton.disabled = true;
-  els.loadButton.querySelector("span").textContent = "查詢中…";
-  setStatus("正在下載 Indicative 標的價與 Put 選擇權鏈…", false);
+  els.loadButton.querySelector("span").textContent = "載入中…";
+  setStatus("正在下載免費日線資料並計算期限波動率…", false);
   try {
-    const today = new Date();
-    const sixMonths = addMonths(today, 6);
-    const [spot, entries] = await Promise.all([
-      fetchUnderlyingPrice(symbol, credentials),
-      fetchPutChain(symbol, credentials, today, sixMonths),
-    ]);
-    if (!(spot > 0)) throw new Error("無法取得標的價格，請確認代碼或 API 資料權限。");
-    const options = normaliseOptions(entries, spot, rate, dividend);
-    if (!options.length) throw new Error("此標的在 2 至 6 個月內沒有可計算的 Indicative Put 資料。");
-    const targetStrike = spot * strikePercent / 100;
-    const rows = chooseContracts(options, targetStrike);
-    renderResults({ symbol, spot, targetStrike, rows, rate, dividend, optionCount: options.length });
-    setStatus(`已載入 ${symbol} 的 Indicative Put 選擇權鏈。`, false);
+    const prices = await fetchDailyPrices(symbol, apiKey);
+    const returns = toLogReturns(prices);
+    if (returns.length < TERM_WINDOWS.at(-1).sessions) {
+      throw new Error("可用日線資料不足 126 個交易日，無法計算完整 2 至 6 個月期限。");
+    }
+    const rows = TERM_WINDOWS.map(({ months, sessions }) => ({
+      months,
+      sessions,
+      metrics: calculateMetrics(returns.slice(-sessions), buffer),
+    }));
+    renderResults({ symbol, prices, rows, buffer });
+    setStatus(`已載入 ${symbol} 的免費日線波動率資料。`, false);
   } catch (error) {
     console.error(error);
     setStatus(error.message || "資料載入失敗，請稍後再試。", true);
   } finally {
     els.loadButton.disabled = false;
-    els.loadButton.querySelector("span").textContent = "載入期限 IV";
+    els.loadButton.querySelector("span").textContent = "載入波動率";
   }
 }
 
-els.form.addEventListener("submit", loadTermStructure);
-els.credentialsForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  saveCredentials();
-});
-els.saveCredentials.addEventListener("click", saveCredentials);
-els.clearCredentials.addEventListener("click", clearCredentials);
-loadCredentials();
+els.apiKey.value = sessionStorage.getItem(API_KEY_CACHE) || "";
+els.form.addEventListener("submit", loadVolatility);

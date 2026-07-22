@@ -68,6 +68,8 @@ h2 { margin: 4px 0 0; font-size: 23px; letter-spacing: -.035em; }
 .field { display: flex; flex-direction: column; gap: 7px; margin: 0 0 15px; color: #596578; font-family: "Noto Sans TC", sans-serif; font-size: 12px; font-weight: 600; }
 .field input { width: 100%; min-width: 0; height: 43px; padding: 0 11px; border: 1px solid #d7dce2; border-radius: 9px; outline: none; color: var(--ink); background: #fff; font-family: "DM Mono", "Noto Sans TC", monospace; font-size: 14px; transition: border-color .2s, box-shadow .2s; }
 .field input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(7, 123, 118, .11); }
+.api-help { margin: -6px 0 16px; color: var(--muted); font-family: "Noto Sans TC", sans-serif; font-size: 11px; }
+.api-help a { margin-left: 6px; color: var(--teal); }
 .field-wide input { height: 50px; font-size: 19px; font-weight: 500; text-transform: uppercase; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 11px; }
 .field-grid .field:last-child { grid-column: span 2; }
